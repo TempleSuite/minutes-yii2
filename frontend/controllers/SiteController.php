@@ -4,14 +4,20 @@ namespace frontend\controllers;
 use Yii;
 use yii\base\InvalidParamException;
 use yii\web\BadRequestHttpException;
+use yii\web\HttpException;
 use yii\web\Controller;
 use yii\filters\VerbFilter;
 use yii\filters\AccessControl;
+use yii\web\UploadedFile;
+use yii\helpers\FileHelper;
+use yii\helpers\Json;
 use common\models\LoginForm;
 use frontend\models\PasswordResetRequestForm;
 use frontend\models\ResetPasswordForm;
 use frontend\models\SignupForm;
 use frontend\models\ContactForm;
+use frontend\models\SystemConfiguration;
+use frontend\models\Company;
 
 /**
  * Site controller
@@ -26,7 +32,7 @@ class SiteController extends Controller
         return [
             'access' => [
                 'class' => AccessControl::className(),
-                'only' => ['logout', 'signup'],
+                'only' => ['logout', 'signup', 'index', 'config'],
                 'rules' => [
                     [
                         'actions' => ['signup'],
@@ -34,7 +40,7 @@ class SiteController extends Controller
                         'roles' => ['?'],
                     ],
                     [
-                        'actions' => ['logout'],
+                        'actions' => ['logout', 'index', 'config'],
                         'allow' => true,
                         'roles' => ['@'],
                     ],
@@ -72,7 +78,8 @@ class SiteController extends Controller
      */
     public function actionIndex()
     {
-        return $this->render('index');
+        //return $this->render('index');
+        $this->redirect(['/mm/meeting-group']);
     }
 
     /**
@@ -210,4 +217,84 @@ class SiteController extends Controller
             'model' => $model,
         ]);
     }
+
+    public function actionConfig()
+    {
+        $model = SystemConfiguration::find()->where(['id' => 1])->one();
+        if (!isset($model)) {
+            $model = new SystemConfiguration();
+            $model->save();
+        }
+
+        $company = Company::find()->where(['id' => $model->company_id])->one();
+        if (empty($company)) {
+            $company = new Company();
+        }
+
+        $request = Yii::$app->request;
+
+        if ($company->load($request->post()) && $company->save()) {
+            $model->company_id = $company->id;
+            $model->save();
+        }
+
+        return $this->render('config', [
+            'company' => $company,
+        ]);
+    }
+
+    public function actionUploadLogo()
+    {
+        $model = SystemConfiguration::find()->where(['id' => 1])->one();
+        if (!isset($model)) {
+            $model = new SystemConfiguration();
+            $model->save();
+        }
+
+        $company = Company::find()->where(['id' => $model->company_id])->one();
+        if (empty($company)) {
+            throw new HttpException(410, "Company name cannot be blank");
+        }
+        $previousLogo = $company->logo;
+
+        $file = UploadedFile::getInstance($company, 'logo');
+
+        $directory = Yii::getAlias('@frontend/web/logo/');
+        if (!is_dir($directory)) {
+            FileHelper::createDirectory($directory);
+        }
+
+        if ($file) {
+            //$uid = uniqid(time(), true);
+            //$fileName = $uid . '.' . $file->extension;
+            $fileName = $file->name;
+
+            $filePath = $directory . $fileName;
+            if ($file->saveAs($filePath)) {
+                $path = Yii::getAlias('@webroot') . DIRECTORY_SEPARATOR . 'logo' . DIRECTORY_SEPARATOR . $fileName;
+
+                $company->logo = $fileName;
+                $company->save();
+
+                if ($previousLogo && file_exists(Yii::getAlias('@webroot') . '/logo/' . $previousLogo))
+                    unlink(Yii::getAlias('@webroot') . '/logo/' . $previousLogo);
+
+                return Json::encode([
+                    'files' => [
+                        [
+                            'name' => $fileName,
+                            'size' => $file->size,
+                            'url' => $path,
+                            'thumbnailUrl' => $path,
+                            'deleteUrl' => 'image-delete?name=' . $fileName,
+                            'deleteType' => 'POST',
+                        ],
+                    ],
+                ]);
+            }
+        }
+
+        return '';
+    }
+
 }
